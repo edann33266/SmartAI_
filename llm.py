@@ -1,71 +1,51 @@
 import json
 import os
-
-import requests
 from dotenv import load_dotenv
-
 
 load_dotenv()
 
-# Ollama configuration
-_OLLAMA_MODEL = os.getenv("OLLAMA_MODEL", "llama3.1")
-_OLLAMA_URL = os.getenv("OLLAMA_URL", "http://localhost:11434")
-_OLLAMA_TIMEOUT_S = float(os.getenv("OLLAMA_TIMEOUT_S", "120"))
+_GEMINI_API_KEY = os.getenv("GEMINI_API_KEY", "")
+_GEMINI_MODEL = os.getenv("GEMINI_MODEL", "gemini-2.0-flash")
 
 
-def _ollama_generate(prompt: str, temperature: float, response_format: str | None = None) -> str:
-    """
-    Low-level helper to call the local Ollama HTTP API.
-    """
+def _gemini_generate(prompt: str, temperature: float, want_json: bool = False) -> str:
+    if not _GEMINI_API_KEY:
+        return "[ERROR] GEMINI_API_KEY is not set. Add it to your .env file or host environment variables."
+
     try:
-        payload: dict = {
-            "model": _OLLAMA_MODEL,
-            "prompt": prompt,
-            "stream": False,
-            "options": {"temperature": temperature},
-        }
-        if response_format is not None:
-            # Ollama supports structured output via "format": "json"
-            payload["format"] = response_format
+        from google import genai
+        from google.genai import types
 
-        resp = requests.post(
-            f"{_OLLAMA_URL}/api/generate",
-            json=payload,
-            timeout=(5, _OLLAMA_TIMEOUT_S),
+        client = genai.Client(api_key=_GEMINI_API_KEY)
+
+        config = types.GenerateContentConfig(temperature=temperature)
+        if want_json:
+            config.response_mime_type = "application/json"
+
+        response = client.models.generate_content(
+            model=_GEMINI_MODEL,
+            contents=prompt,
+            config=config,
         )
-        resp.raise_for_status()
-        data = resp.json()
-        return (data.get("response") or "").strip()
-    except requests.Timeout:
-        return (
-            "[ERROR] Ollama request timed out. The model might be too slow or not responding. "
-            "Try a smaller/faster model or increase OLLAMA_TIMEOUT_S in .env"
-        )
-    except requests.ConnectionError:
-        return (
-            "[ERROR] Cannot connect to Ollama server. "
-            "Make sure Ollama is running: 'ollama serve' "
-            f"Expected at: {_OLLAMA_URL}"
-        )
-    except requests.RequestException as exc:
-        return f"[ERROR] Ollama request failed: {exc}"
+        return (response.text or "").strip()
+    except Exception as exc:  # noqa: BLE001
+        return f"[ERROR] Gemini request failed: {exc}"
 
 
 def generate_text(prompt: str, temperature: float = 0.7) -> str:
     """
-    Simple wrapper around local Ollama text generation.
+    Generate plain text via Gemini.
     """
-    return _ollama_generate(prompt, temperature=temperature)
+    return _gemini_generate(prompt, temperature=temperature, want_json=False)
 
 
 def generate_json(prompt: str, temperature: float = 0.3) -> dict:
     """
-    Ask Ollama to return a JSON object. We still parse from text to be robust.
-
-    On errors, return a safe default JSON structure so downstream code
-    (like the SalesManagerAgent) can continue to run.
+    Ask Gemini to return a JSON object. Parses defensively.
+    On errors, returns {"_raw": ...} so callers (e.g. SalesManagerAgent)
+    can fall back gracefully instead of crashing.
     """
-    raw = _ollama_generate(prompt, temperature=temperature, response_format="json")
+    raw = _gemini_generate(prompt, temperature=temperature, want_json=True)
 
     def _try_parse(text: str) -> dict | None:
         try:
@@ -74,12 +54,10 @@ def generate_json(prompt: str, temperature: float = 0.3) -> dict:
         except json.JSONDecodeError:
             return None
 
-    # 1) direct parse
     parsed = _try_parse(raw)
     if parsed is not None:
         return parsed
 
-    # 2) strip common code fences
     cleaned = raw.strip()
     if cleaned.startswith("```"):
         cleaned = cleaned.strip("`")
@@ -88,7 +66,6 @@ def generate_json(prompt: str, temperature: float = 0.3) -> dict:
         if parsed is not None:
             return parsed
 
-    # 3) extract first {...} block
     start = raw.find("{")
     end = raw.rfind("}")
     if start != -1 and end != -1 and end > start:
@@ -97,5 +74,4 @@ def generate_json(prompt: str, temperature: float = 0.3) -> dict:
         if parsed is not None:
             return parsed
 
-    # Fallback – return raw text wrapped
     return {"_raw": raw}
