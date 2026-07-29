@@ -1,6 +1,8 @@
 """
 Test script to verify the agent strip() error is fixed
 """
+import sys, os
+sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 from agents import Customer, EmailWriterAgent, SalesManagerAgent
 
 def test_agent_with_various_inputs():
