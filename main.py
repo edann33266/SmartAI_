@@ -1,79 +1,58 @@
-"""Primary application entrypoint.
-"""
-import locale
-import logging
 import os
-import sys
-import warnings
-from typing import List, Optional
 
-from pip._internal.cli.autocompletion import autocomplete
-from pip._internal.cli.main_parser import parse_command
-from pip._internal.commands import create_command
-from pip._internal.exceptions import PipError
-from pip._internal.utils import deprecation
+from dotenv import load_dotenv
 
-logger = logging.getLogger(__name__)
+from agents import Customer, EmailWriterAgent, SalesManagerAgent
+from api import load_customers  # reuses the same CSV loader as the API
+from email_sender import send_email
 
+load_dotenv()
 
-# Do not import and use main() directly! Using it directly is actively
-# discouraged by pip's maintainers. The name, location and behavior of
-# this function is subject to change, so calling it directly is not
-# portable across different pip versions.
-
-# In addition, running pip in-process is unsupported and unsafe. This is
-# elaborated in detail at
-# https://pip.pypa.io/en/stable/user_guide/#using-pip-from-your-program.
-# That document also provides suggestions that should work for nearly
-# all users that are considering importing and using main() directly.
-
-# However, we know that certain users will still want to invoke pip
-# in-process. If you understand and accept the implications of using pip
-# in an unsupported manner, the best approach is to use runpy to avoid
-# depending on the exact location of this entry point.
-
-# The following example shows how to use runpy to invoke pip in that
-# case:
-#
-#     sys.argv = ["pip", your, args, here]
-#     runpy.run_module("pip", run_name="__main__")
-#
-# Note that this will exit the process after running, unlike a direct
-# call to main. As it is not safe to do any processing after calling
-# main, this should not be an issue in practice.
+_PRODUCT_NAME = os.getenv("PRODUCT_NAME", "SalesAI Copilot")
+_PRODUCT_VALUE_PROP = os.getenv(
+    "PRODUCT_VALUE_PROP",
+    "helps sales teams automatically prioritize leads and draft highly "
+    "personalized outreach, saving hours per week.",
+)
 
 
-def main(args: Optional[List[str]] = None) -> int:
-    if args is None:
-        args = sys.argv[1:]
+def main() -> None:
+    customers = load_customers()
+    print(f"Loaded {len(customers)} customers.")
 
-    # Suppress the pkg_resources deprecation warning
-    # Note - we use a module of .*pkg_resources to cover
-    # the normal case (pip._vendor.pkg_resources) and the
-    # devendored case (a bare pkg_resources)
-    warnings.filterwarnings(
-        action="ignore", category=DeprecationWarning, module=".*pkg_resources"
-    )
+    manager = SalesManagerAgent()
+    selected = manager.select_leads(customers)
+    print(f"SalesManager selected {len(selected)} customer(s) for outreach.")
 
-    # Configure our deprecation warnings to be sent through loggers
-    deprecation.install_warning_logger()
+    writer_agents = {
+        "value_focus": EmailWriterAgent(
+            "value_focus", "ROI-focused; quantify value with concrete numbers"
+        ),
+        "relationship_focus": EmailWriterAgent(
+            "relationship_focus", "warm, consultative, partnership-oriented tone"
+        ),
+        "urgency_focus": EmailWriterAgent(
+            "urgency_focus", "direct, concise, gentle sense of urgency"
+        ),
+    }
 
-    autocomplete()
+    for customer in selected:
+        print(f"\n=== Working on customer: {customer.name} ({customer.company}) ===")
 
-    try:
-        cmd_name, cmd_args = parse_command(args)
-    except PipError as exc:
-        sys.stderr.write(f"ERROR: {exc}")
-        sys.stderr.write(os.linesep)
-        sys.exit(1)
+        drafts = {
+            name: agent.draft_email(customer, _PRODUCT_NAME, _PRODUCT_VALUE_PROP)
+            for name, agent in writer_agents.items()
+        }
 
-    # Needed for locale.getpreferredencoding(False) to work
-    # in pip._internal.utils.encoding.auto_decode
-    try:
-        locale.setlocale(locale.LC_ALL, "")
-    except locale.Error as e:
-        # setlocale can apparently crash if locale are uninitialized
-        logger.debug("Ignoring error %s when setting locale", e)
-    command = create_command(cmd_name, isolated=("--isolated" in cmd_args))
+        decision = manager.choose_best_email(customer, drafts)
+        print(f"Manager chose agent: {decision.get('chosen_agent')}")
+        print(f"Reasoning: {decision.get('reasoning')}")
+        print("-" * 60)
+        print(decision.get("final_email"))
+        print("-" * 60)
 
-    return command.main(cmd_args)
+        send_email(to_address=customer.email, email_text=decision.get("final_email", ""))
+
+
+if __name__ == "__main__":
+    main()
