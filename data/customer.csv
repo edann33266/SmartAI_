@@ -1,0 +1,7 @@
+name,email,company,industry,lead_score,last_contact_days_ago,annual_revenue,current_tool,region
+Atharv Bhardwaj,atharvbhardwaj07@gmail.com,Acme Analytics,SaaS,92,45,1200000,Excel,North America
+Sonal Bose,sonal.bose@databridge.com,DataBridge Inc,SaaS,81,30,1600000,No CRM Tool,Africa
+Geeta Iyer,giyer@galaxy.in,Galaxy Digital,Retail,58,20,400000,Freshsales,North India
+Bob Smith,bob@example.com,Smith & Co,Manufacturing,78,10,800000,None,Europe
+Wei Chen,wei.chen@brightpath.com,BrightPath Tech,Technology,88,60,2100000,HubSpot,Asia
+Maria Alvarez,maria.alvarez@finflow.com,FinFlow Solutions,Finance,84,21,950000,Salesforce,Europe
