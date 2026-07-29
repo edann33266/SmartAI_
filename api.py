@@ -1,223 +1,292 @@
-"""Base API."""
-from __future__ import annotations
-
+import csv
+import logging
 import os
-from abc import ABC, abstractmethod
 from pathlib import Path
-from typing import TYPE_CHECKING
+from typing import List, Optional
 
-if TYPE_CHECKING:
-    import sys
+from dotenv import load_dotenv
+from fastapi import FastAPI, HTTPException, status
+from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import JSONResponse
+from pydantic import BaseModel, Field, field_validator
 
-    if sys.version_info >= (3, 8):  # pragma: no cover (py38+)
-        from typing import Literal
-    else:  # pragma: no cover (py38+)
-        from pip._vendor.typing_extensions import Literal
+from agents import Customer, EmailWriterAgent, SalesManagerAgent
+
+load_dotenv()
+
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
+)
+logger = logging.getLogger("salesai.api")
+
+# ---------------- Config ----------------
+_DATA_PATH = Path(os.getenv("CUSTOMERS_CSV", "data/customers.csv"))
+_PRODUCT_NAME = os.getenv("PRODUCT_NAME", "SalesAI Copilot")
+_PRODUCT_VALUE_PROP = os.getenv(
+    "PRODUCT_VALUE_PROP",
+    "helps sales teams automatically prioritize leads and draft highly "
+    "personalized outreach, saving hours per week.",
+)
+
+# CORS origins — add your deployed frontend URL here once you have it
+_ALLOWED_ORIGINS = [
+    o.strip()
+    for o in os.getenv(
+        "ALLOWED_ORIGINS",
+        "http://localhost:5500,http://127.0.0.1:5500",
+    ).split(",")
+    if o.strip()
+]
+
+# ---------------- Optional ML scorer ----------------
+try:
+    from ml.ml_lead_scorer import MLLeadScorer
+
+    _ml_scorer: Optional[MLLeadScorer] = MLLeadScorer()
+except Exception as exc:  # noqa: BLE001
+    logger.warning("ML scorer unavailable, falling back to rule-based selection: %s", exc)
+    _ml_scorer = None
+
+# ---------------- App setup ----------------
+app = FastAPI(title="SalesAI API")
+
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=_ALLOWED_ORIGINS,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
+manager = SalesManagerAgent()
+
+_WRITER_AGENTS = {
+    "value_focus": EmailWriterAgent(
+        "value_focus",
+        "ROI-focused; quantify value with concrete numbers and business impact",
+    ),
+    "relationship_focus": EmailWriterAgent(
+        "relationship_focus",
+        "warm, consultative, partnership-oriented tone",
+    ),
+    "urgency_focus": EmailWriterAgent(
+        "urgency_focus",
+        "direct, concise, gentle sense of urgency",
+    ),
+}
 
 
-class PlatformDirsABC(ABC):
-    """Abstract base class for platform directories."""
+# ---------------- Data loading ----------------
+def load_customers() -> List[Customer]:
+    if not _DATA_PATH.exists():
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Customer data file not found at {_DATA_PATH}",
+        )
 
-    def __init__(  # noqa: PLR0913
-        self,
-        appname: str | None = None,
-        appauthor: str | None | Literal[False] = None,
-        version: str | None = None,
-        roaming: bool = False,  # noqa: FBT001, FBT002
-        multipath: bool = False,  # noqa: FBT001, FBT002
-        opinion: bool = True,  # noqa: FBT001, FBT002
-        ensure_exists: bool = False,  # noqa: FBT001, FBT002
-    ) -> None:
-        """
-        Create a new platform directory.
+    customers: List[Customer] = []
+    with open(_DATA_PATH, "r", encoding="utf-8") as f:
+        reader = csv.DictReader(f)
+        for row in reader:
+            try:
+                customers.append(Customer.from_row(row))
+            except (KeyError, ValueError) as exc:
+                logger.warning("Skipping invalid row: %s", exc)
+    return customers
 
-        :param appname: See `appname`.
-        :param appauthor: See `appauthor`.
-        :param version: See `version`.
-        :param roaming: See `roaming`.
-        :param multipath: See `multipath`.
-        :param opinion: See `opinion`.
-        :param ensure_exists: See `ensure_exists`.
-        """
-        self.appname = appname  #: The name of application.
-        self.appauthor = appauthor
-        """
-        The name of the app author or distributing body for this application. Typically, it is the owning company name.
-        Defaults to `appname`. You may pass ``False`` to disable it.
-        """
-        self.version = version
-        """
-        An optional version path element to append to the path. You might want to use this if you want multiple versions
-        of your app to be able to run independently. If used, this would typically be ``<major>.<minor>``.
-        """
-        self.roaming = roaming
-        """
-        Whether to use the roaming appdata directory on Windows. That means that for users on a Windows network setup
-        for roaming profiles, this user data will be synced on login (see
-        `here <http://technet.microsoft.com/en-us/library/cc766489(WS.10).aspx>`_).
-        """
-        self.multipath = multipath
-        """
-        An optional parameter only applicable to Unix/Linux which indicates that the entire list of data dirs should be
-        returned. By default, the first item would only be returned.
-        """
-        self.opinion = opinion  #: A flag to indicating to use opinionated values.
-        self.ensure_exists = ensure_exists
-        """
-        Optionally create the directory (and any missing parents) upon access if it does not exist.
-        By default, no directories are created.
-        """
 
-    def _append_app_name_and_version(self, *base: str) -> str:
-        params = list(base[1:])
-        if self.appname:
-            params.append(self.appname)
-            if self.version:
-                params.append(self.version)
-        path = os.path.join(base[0], *params)  # noqa: PTH118
-        self._optionally_create_directory(path)
-        return path
+def find_customer_by_email(email: str) -> Optional[Customer]:
+    if not email or "@" not in email:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Invalid email format",
+        )
+    for customer in load_customers():
+        if customer.email.lower() == email.lower():
+            return customer
+    return None
 
-    def _optionally_create_directory(self, path: str) -> None:
-        if self.ensure_exists:
-            Path(path).mkdir(parents=True, exist_ok=True)
 
-    @property
-    @abstractmethod
-    def user_data_dir(self) -> str:
-        """:return: data directory tied to the user"""
+# ---------------- Pydantic models ----------------
+class EmailSendRequest(BaseModel):
+    email_text: str = Field(..., min_length=10)
 
-    @property
-    @abstractmethod
-    def site_data_dir(self) -> str:
-        """:return: data directory shared by users"""
+    @field_validator("email_text")
+    @classmethod
+    def validate_email_text(cls, v: str) -> str:
+        if not v.strip():
+            raise ValueError("Email text cannot be empty")
+        if len(v.strip()) < 10:
+            raise ValueError("Email text is too short")
+        return v
 
-    @property
-    @abstractmethod
-    def user_config_dir(self) -> str:
-        """:return: config directory tied to the user"""
 
-    @property
-    @abstractmethod
-    def site_config_dir(self) -> str:
-        """:return: config directory shared by the users"""
+def _customer_to_dict(customer: Customer) -> dict:
+    payload = {
+        "name": customer.name,
+        "email": customer.email,
+        "company": customer.company,
+        "industry": customer.industry,
+        "lead_score": customer.lead_score,
+        "last_contact_days_ago": customer.last_contact_days_ago,
+        "annual_revenue": customer.annual_revenue,
+        "current_tool": customer.current_tool,
+        "region": customer.region,
+        "selected_for_outreach": customer.lead_score >= 80 and customer.last_contact_days_ago >= 14,
+    }
+    if _ml_scorer is not None:
+        try:
+            payload["conversion_probability"] = _ml_scorer.predict_conversion_probability(customer)
+            payload["ml_score_available"] = True
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("ML scoring failed for %s: %s", customer.email, exc)
+            payload["ml_score_available"] = False
+    else:
+        payload["ml_score_available"] = False
+    return payload
 
-    @property
-    @abstractmethod
-    def user_cache_dir(self) -> str:
-        """:return: cache directory tied to the user"""
 
-    @property
-    @abstractmethod
-    def site_cache_dir(self) -> str:
-        """:return: cache directory shared by users"""
+# ---------------- Routes ----------------
+@app.get("/customers")
+async def get_customers():
+    customers = load_customers()
+    return [_customer_to_dict(c) for c in customers]
 
-    @property
-    @abstractmethod
-    def user_state_dir(self) -> str:
-        """:return: state directory tied to the user"""
 
-    @property
-    @abstractmethod
-    def user_log_dir(self) -> str:
-        """:return: log directory tied to the user"""
+@app.get("/customers/{email}")
+async def get_customer(email: str):
+    customer = find_customer_by_email(email)
+    if customer is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Customer with email '{email}' not found",
+        )
+    return _customer_to_dict(customer)
 
-    @property
-    @abstractmethod
-    def user_documents_dir(self) -> str:
-        """:return: documents directory tied to the user"""
 
-    @property
-    @abstractmethod
-    def user_downloads_dir(self) -> str:
-        """:return: downloads directory tied to the user"""
+@app.post("/customers/{email}/generate")
+async def generate_email(email: str):
+    logger.info("Generating email for %s", email)
+    customer = find_customer_by_email(email)
+    if customer is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Customer with email '{email}' not found",
+        )
 
-    @property
-    @abstractmethod
-    def user_pictures_dir(self) -> str:
-        """:return: pictures directory tied to the user"""
+    try:
+        drafts = {}
+        for name, writer in _WRITER_AGENTS.items():
+            draft = writer.draft_email(customer, _PRODUCT_NAME, _PRODUCT_VALUE_PROP)
+            if not isinstance(draft, str):
+                logger.warning("Agent %s returned non-string draft: %s", name, type(draft))
+                draft = str(draft) if draft else ""
+            drafts[name] = draft
 
-    @property
-    @abstractmethod
-    def user_videos_dir(self) -> str:
-        """:return: videos directory tied to the user"""
+        decision = manager.choose_best_email(customer, drafts)
 
-    @property
-    @abstractmethod
-    def user_music_dir(self) -> str:
-        """:return: music directory tied to the user"""
+        logger.info("Email generated successfully for %s (chosen: %s)", email, decision.get("chosen_agent"))
 
-    @property
-    @abstractmethod
-    def user_runtime_dir(self) -> str:
-        """:return: runtime directory tied to the user"""
+        return {
+            "customer": _customer_to_dict(customer),
+            "chosen_agent": decision.get("chosen_agent"),
+            "final_email": decision.get("final_email"),
+            "reasoning": decision.get("reasoning"),
+        }
+    except Exception as exc:  # noqa: BLE001
+        logger.error("Error generating email for %s: %s", email, exc, exc_info=True)
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Email generation failed: {exc}",
+        )
 
-    @property
-    def user_data_path(self) -> Path:
-        """:return: data path tied to the user"""
-        return Path(self.user_data_dir)
 
-    @property
-    def site_data_path(self) -> Path:
-        """:return: data path shared by users"""
-        return Path(self.site_data_dir)
+@app.post("/customers/{email}/send")
+async def send_generated_email(email: str, payload: EmailSendRequest):
+    from email_sender import send_email
 
-    @property
-    def user_config_path(self) -> Path:
-        """:return: config path tied to the user"""
-        return Path(self.user_config_dir)
+    try:
+        customer = find_customer_by_email(email)
+        if customer is None:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail=f"Customer with email '{email}' not found",
+            )
 
-    @property
-    def site_config_path(self) -> Path:
-        """:return: config path shared by the users"""
-        return Path(self.site_config_dir)
+        result = send_email(to_address=customer.email, email_text=payload.email_text)
 
-    @property
-    def user_cache_path(self) -> Path:
-        """:return: cache path tied to the user"""
-        return Path(self.user_cache_dir)
+        return {
+            "status": "ok",
+            "message": f"Email sent to {customer.name}",
+            "recipient": email,
+            "dry_run": result.get("dry_run", True),
+        }
+    except HTTPException:
+        raise
+    except Exception as exc:  # noqa: BLE001
+        logger.error("Error sending email to %s: %s", email, exc, exc_info=True)
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Email sending failed: {exc}",
+        )
 
-    @property
-    def site_cache_path(self) -> Path:
-        """:return: cache path shared by users"""
-        return Path(self.site_cache_dir)
 
-    @property
-    def user_state_path(self) -> Path:
-        """:return: state path tied to the user"""
-        return Path(self.user_state_dir)
+@app.get("/stats")
+async def get_stats():
+    customers = load_customers()
+    if not customers:
+        return {
+            "total_customers": 0,
+            "selected_for_outreach": 0,
+            "selection_rate": 0,
+            "average_lead_score": 0,
+            "ml_scorer_available": _ml_scorer is not None,
+        }
 
-    @property
-    def user_log_path(self) -> Path:
-        """:return: log path tied to the user"""
-        return Path(self.user_log_dir)
+    selected = manager.select_leads(customers)
+    avg_score = sum(c.lead_score for c in customers) / len(customers)
 
-    @property
-    def user_documents_path(self) -> Path:
-        """:return: documents path tied to the user"""
-        return Path(self.user_documents_dir)
+    stats = {
+        "total_customers": len(customers),
+        "selected_for_outreach": len(selected),
+        "selection_rate": round((len(selected) / len(customers)) * 100, 1),
+        "average_lead_score": round(avg_score, 1),
+        "ml_scorer_available": _ml_scorer is not None,
+    }
 
-    @property
-    def user_downloads_path(self) -> Path:
-        """:return: downloads path tied to the user"""
-        return Path(self.user_downloads_dir)
+    if _ml_scorer is not None:
+        try:
+            probs = [_ml_scorer.predict_conversion_probability(c) for c in customers]
+            stats["average_conversion_probability"] = round(sum(probs) / len(probs), 3)
+            stats["high_probability_leads"] = len([p for p in probs if p >= 0.7])
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("Could not compute ML stats: %s", exc)
 
-    @property
-    def user_pictures_path(self) -> Path:
-        """:return: pictures path tied to the user"""
-        return Path(self.user_pictures_dir)
+    return stats
 
-    @property
-    def user_videos_path(self) -> Path:
-        """:return: videos path tied to the user"""
-        return Path(self.user_videos_dir)
 
-    @property
-    def user_music_path(self) -> Path:
-        """:return: music path tied to the user"""
-        return Path(self.user_music_dir)
+@app.get("/health")
+async def health_check():
+    try:
+        customers = load_customers()
+        return {
+            "status": "healthy",
+            "customers_loaded": len(customers),
+            "ml_scorer_available": _ml_scorer is not None,
+            "llm_provider": "gemini",
+        }
+    except Exception as exc:  # noqa: BLE001
+        logger.error("Health check failed: %s", exc)
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Service unhealthy",
+        )
 
-    @property
-    def user_runtime_path(self) -> Path:
-        """:return: runtime path tied to the user"""
-        return Path(self.user_runtime_dir)
+
+@app.exception_handler(Exception)
+async def global_exception_handler(request, exc):
+    logger.error("Unhandled exception: %s", exc, exc_info=True)
+    return JSONResponse(
+        status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+        content={"error": "Internal Server Error", "detail": str(exc), "status_code": 500},
+    )
