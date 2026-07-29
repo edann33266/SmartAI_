@@ -1,0 +1,110 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>SalesAI — Outreach Copilot</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="styles.css" />
+</head>
+<body>
+
+<header class="topbar">
+  <div class="topbar-inner">
+    <div class="brand">
+      <span class="brand-mark" aria-hidden="true">
+        <svg width="20" height="20" viewBox="0 0 24 24" fill="none">
+          <path d="M13 2 L4 14 H11 L9 22 L20 8 H13 L13 2Z" fill="currentColor"/>
+        </svg>
+      </span>
+      <div class="brand-text">
+        <span class="brand-title">SalesAI</span>
+        <span class="brand-subtitle">Outreach Copilot</span>
+      </div>
+    </div>
+
+    <div class="status-cluster">
+      <div class="lead-counter" id="leadCounter">— leads</div>
+      <div class="status-pill" id="statusPill">
+        <span class="status-dot" id="statusDot"></span>
+        <span id="statusText">Checking…</span>
+      </div>
+    </div>
+  </div>
+</header>
+
+<main class="layout">
+
+  <!-- LEADS SIDEBAR -->
+  <aside class="panel leads-panel">
+    <div class="panel-head">
+      <h2>Leads</h2>
+      <span class="panel-head-badge" id="sidebarCount">0</span>
+    </div>
+    <div class="leads-list" id="leadsList">
+      <div class="empty-state" id="leadsEmptyState">
+        <p>No leads loaded yet.</p>
+        <span>Make sure the backend is running on <code>localhost:8000</code>.</span>
+      </div>
+    </div>
+  </aside>
+
+  <!-- MAIN COLUMN -->
+  <section class="main-col">
+
+    <!-- LEAD DETAILS -->
+    <div class="panel detail-panel">
+      <div class="panel-head gradient-head head-detail">
+        <h2>Lead details</h2>
+        <button class="btn btn-ghost" id="generateBtn" disabled>
+          <span class="btn-label">Generate email</span>
+          <span class="btn-spinner" hidden></span>
+        </button>
+      </div>
+
+      <div class="detail-body" id="detailBody">
+        <div class="empty-state">
+          <p>Select a lead to see their profile.</p>
+          <span>Pick anyone from the list on the left to get started.</span>
+        </div>
+      </div>
+    </div>
+
+    <!-- EMAIL COMPOSER -->
+    <div class="panel composer-panel">
+      <div class="panel-head gradient-head head-composer">
+        <h2>Generated email</h2>
+        <button class="btn btn-ghost" id="sendBtnTop" disabled>
+          <span class="btn-label">Send email</span>
+          <span class="btn-spinner" hidden></span>
+        </button>
+      </div>
+
+      <div class="composer-body">
+        <div class="field-block">
+          <label for="emailContent">Email content</label>
+          <span class="validation-flag" id="contentValidation"></span>
+          <textarea id="emailContent" placeholder="Generate an email to see a draft here…" spellcheck="false"></textarea>
+        </div>
+
+        <div class="field-block">
+          <label for="reasoningContent">Manager reasoning</label>
+          <textarea id="reasoningContent" readonly placeholder="The manager agent's reasoning will appear here after generation."></textarea>
+        </div>
+
+        <button class="btn btn-primary btn-full" id="sendBtnBottom" disabled>
+          <span class="btn-label">Send email now</span>
+          <span class="btn-spinner" hidden></span>
+        </button>
+      </div>
+    </div>
+
+  </section>
+</main>
+
+<div class="toast-stack" id="toastStack"></div>
+
+<script src="app.js"></script>
+</body>
+</html>
