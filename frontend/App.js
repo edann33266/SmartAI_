@@ -1,4 +1,7 @@
 // ---------- Config ----------
+// Local dev: http://localhost:8000
+// After deploying the backend on Render, change this to that URL, e.g.
+// const API_BASE = "https://salesai-backend.onrender.com";
 const API_BASE = "http://localhost:8000";
 
 // ---------- State ----------
