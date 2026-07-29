@@ -3,6 +3,8 @@ Test script to demonstrate the improvements:
 1. ML-based lead scoring
 2. Error handling and validation
 """
+import sys, os
+sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 import sys
 from pathlib import Path
 
